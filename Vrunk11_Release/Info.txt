@@ -5,3 +5,22 @@ if you have somme idea of improvement or issue let me know on github or in MP on
 also here is the thread talking About the koryuu transcoder : https://shmups.system11.org/viewtopic.php?f=6&t=65602
 
 Thanks you
+
+__________________________________________________________________________________________________________________________________________________________________
+
+Release 1.0
+
+This firmware added a switchable output between (CVBS,Y,C) and (Y,Pb,Pr) by Pressing button input and option at the same time 
+
+when YPbPR out is selected the Input led is blinking
+
+The actual CVBS output is programed to output (PAL60 and PAL50) at IRE -7.5 level
+
+The option button is maped for switching between NTSC_JP (IRE_0) and NTSC_M (IRE_7.5) decoding (when NTSC is detected).  The option Led is on when NTSC_M input is activated (the button also resets ACE when switching)
+
+i replaced the Pedestal by (ACE) Automatic Contrast Enhancement (it helps getting better black and more colorful picture)
+
+i also activated all Adaptive 2D comb filtering (maybe it needs some tweak)
+and double buffering
+
+The input button simply switch between CVBS and Y/C now
