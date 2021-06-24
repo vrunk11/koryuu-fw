@@ -1,0 +1,7 @@
+Here is all release of the firmware made by Vrunk11
+The firmware are for now based on the Firware 1.1 made by Megari
+This fork is focus on Video and laserdisc improvement / transcoding (not gaming)
+if you have somme idea of improvement or issue let me know on github or in MP on the shmups forum (https://shmups.system11.org/index.php) Pseudo: vrunk11
+also here is the thread talking About the koryuu transcoder : https://shmups.system11.org/viewtopic.php?f=6&t=65602
+
+Thanks you
