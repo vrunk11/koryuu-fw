@@ -125,6 +125,16 @@ namespace ad_decoder {
 
         void select_input(InputSelection input) {
             I2C_WRITE(address, 0x00, (uint8_t)input);
+            if(input == INSEL_YPbPr_Ain1_2_3)
+            {
+            	I2C_WRITE(address, 0xC3, 0x41);
+            	I2C_WRITE(address, 0xC4, 0x83);
+            }
+            else
+            {
+            	I2C_WRITE(address, 0xC3, 0x00);
+            	I2C_WRITE(address, 0xC4, 0x00);
+            }
         }
 
         void select_autodetection(AutoDetectSelection ad) {

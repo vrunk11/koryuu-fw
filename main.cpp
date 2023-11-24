@@ -78,6 +78,7 @@ using koryuu_settings::Input::CVBS;
 using koryuu_settings::Input::CVBS_PEDESTAL;
 using koryuu_settings::Input::SVIDEO;
 using koryuu_settings::Input::SVIDEO_PEDESTAL;
+using koryuu_settings::Input::COMPONENT;
 Input curr_input;
 
 using koryuu_settings::ConvSettings;
@@ -117,9 +118,15 @@ static void i2c_err_func(uint8_t addr, uint8_t arg_count)
 }
 #endif
 
-bool smoothing_enabled = false;
 bool pedestal_enabled = false;
-bool component_enabled = false;
+bool component_output = true;
+bool component_input = true;
+bool rgb_color = true;
+bool chroma_enabled = true;
+int mode_ire = 0;
+int led_timer1 = 0;
+int input_timer = 0;
+int noise_reduction = 0;
 
 enum : uint8_t {
     FREERUN_STATUS_UNKNOWN = 0,
@@ -158,7 +165,7 @@ static void setup_encoder(bool reset = false)
 {
     if (reset) {
         // Software reset. Ignore the I2C transaction failure.
-        I2C_WRITE<false>(encoder.address, 0x17, 0x02);
+        I2C_WRITE<false>(encoder.address, 0x17, 0x07);
         _delay_ms(1);
     }
 
@@ -197,15 +204,15 @@ static void setup_encoder(bool reset = false)
     // Autodetect SD input standard
     //I2C_WRITE(encoder.address, 0x87, 0x20);
 
-    if (interlace_status == INTERLACE_STATUS_INTERLACED) {
-        // Disable SD progressive mode
+   // if (interlace_status == INTERLACE_STATUS_INTERLACED) {
+        // Disable SD progressive mode + double buffering 8bit input + dnr off
         I2C_WRITE(encoder.address, 0x88, 0x04);
-
-    }
-    else {
-       // Enable SD progressive mode
-        I2C_WRITE(encoder.address, 0x88, 0x06);
-    }
+        noise_reduction = 0;
+   // }
+   // else {
+       // Enable SD progressive mode + double buffering
+   //     I2C_WRITE(encoder.address, 0x88, 0x26);
+   // }
 
     // Pixel data valid, YPrPb, *no* PrPb SSAF filter, AVE control, pedestal
     //I2C_WRITE(encoder.address, 0x82, 0xc8);
@@ -222,29 +229,40 @@ static void setup_encoder(bool reset = false)
 	//I2C_WRITE(encoder.address, 0x84, 0x80);
     const uint8_t input_status = I2C_READ_ONE(decoder.address, 0x13);
     
-	I2C_WRITE(encoder.address, 0x00, 0x1C);
-	I2C_WRITE(encoder.address, 0x01, 0x00);
+	I2C_WRITE(encoder.address, 0x00, 0x1C);//enable dac 1,2,3
+	I2C_WRITE(encoder.address, 0x01, 0x00);//sd input
     //I2C_WRITE(encoder.address, 0x02, 0x20);
     //I2C_WRITE(encoder.address, 0x87, 0x1F);//disable autodetect standard (plus rien en sortie pour le moment)
+    
     if(input_status & 0x04 ?true:false)
     {
-        	I2C_WRITE(encoder.address, 0x80, 0x11);//0x11 for pal
+        I2C_WRITE(encoder.address, 0x80, 0x71);//0x11 for pal + 2mhz filter
     }
     else
     {
-        I2C_WRITE(encoder.address, 0x80, 0x12);//0x12 for pal M
+        I2C_WRITE(encoder.address, 0x80, 0x72);//0x12 for pal M + 2mhz filter
     }
-    if(component_enabled)
+    if(component_output)
     {
-        I2C_WRITE(encoder.address, 0x82, 0xC1);
+        I2C_WRITE(encoder.address, 0x82, 0xC0);
+		
     }
     else
     {
-        I2C_WRITE(encoder.address, 0x82, 0xC3);//0xCB for pedestal  sinon 0xC3
+        I2C_WRITE(encoder.address, 0x82, 0xC2);//0xCB for pedestal(+7.5)  sinon 0xC3
+        
     }
-    I2C_WRITE(encoder.address, 0x83, 0x74);//closedcaptioning + ire 0 output
-    I2C_WRITE(encoder.address, 0xA1, 0x71);//brightness  control IRE-7.5
 	
+	if(rgb_color)
+	{
+		I2C_WRITE(encoder.address, 0x02, 0x54);
+	}
+	else
+	{
+		I2C_WRITE(encoder.address, 0x02, 0x74);
+	}
+	
+    I2C_WRITE(encoder.address, 0x83, 0x76);//closedcaptioning + output voltage level
     
 	I2C_WRITE(encoder.address, 0x8C, 0xCB);
 	I2C_WRITE(encoder.address, 0x8D, 0x8A);
@@ -266,9 +284,61 @@ static inline void setup_ad_black_magic()
     I2C_WRITE(decoder.address, 0x9c, 0x00);
     I2C_WRITE(decoder.address, 0x9c, 0xff);
     decoder.select_submap(DEC_SUBMAP_USER);
-    I2C_WRITE(decoder.address, 0x80, 0x51);//0x80 peut ètre
+    //I2C_WRITE(decoder.address, 0x80, 0x51);//0x80 peut ètre (ADAPTIVE CONTRAST ENHANCEMENT)
     I2C_WRITE(decoder.address, 0x81, 0x51);
     I2C_WRITE(decoder.address, 0x82, 0x68);
+}
+
+static void set_video_range(int ire_input_mode = 0,bool component_out = false,bool component_in = false)
+{
+			
+		switch (ire_input_mode) {
+			case 0://mode 1    
+                I2C_WRITE(encoder.address, 0x87, 0x00);//sd brightness controll
+				I2C_WRITE(decoder.address, 0x02, 0x04);//no pedestal
+				I2C_WRITE(encoder.address, 0xA1, 0x00);//brightness  control IRE 0
+				I2C_WRITE(encoder.address, 0x0B, 0x00);//Output gain 0%
+				break;
+			case 1://mode 2
+                I2C_WRITE(encoder.address, 0x87, 0x08);//sd brightness controll
+				I2C_WRITE(decoder.address, 0x02, 0x04);//no pedestal
+				I2C_WRITE(encoder.address, 0xA1, 0xF9);//brightness  control IRE-3.5
+				I2C_WRITE(encoder.address, 0x0B, 0x20);//Output gain 0%
+				break;
+			case 2://mode 3
+				I2C_WRITE(encoder.address, 0x87, 0x08);//sd brightness controll
+				I2C_WRITE(decoder.address, 0x02, 0x34);//pedestal input -7.5
+				I2C_WRITE(encoder.address, 0xA1, 0x00);//brightness  control IRE 0
+				I2C_WRITE(encoder.address, 0x0B, 0x00);//Output gain 0%
+				break;
+			case 3://mode 4
+                I2C_WRITE(encoder.address, 0x87, 0x08);//sd brightness controll
+				I2C_WRITE(decoder.address, 0x02, 0x34);//pedestal input -7.5
+				I2C_WRITE(encoder.address, 0xA1, 0xF9);//brightness  control IRE-3.5
+				I2C_WRITE(encoder.address, 0x0B, 0x20);//Output gain 0%
+				break;
+			case 4://mode 5
+                I2C_WRITE(encoder.address, 0x87, 0x08);//sd brightness controll
+				I2C_WRITE(decoder.address, 0x02, 0x34);//pedestal input -7.5
+				I2C_WRITE(encoder.address, 0xA1, 0x71);//brightness  control IRE-7.5
+				I2C_WRITE(encoder.address, 0x0B, 0x40);//Output gain 7.5%
+				break;
+			case 5://mode 6
+                I2C_WRITE(encoder.address, 0x87, 0x08);//sd brightness controll
+				I2C_WRITE(decoder.address, 0x02, 0x34);//pedestal input -7.5
+				I2C_WRITE(encoder.address, 0xA1, 0xEA);//brightness  control IRE-11  (-7.5 - 3.5)
+				I2C_WRITE(encoder.address, 0x0B, 0x40);//Output gain 7.5%
+				break;
+			case 6://mode 7
+                I2C_WRITE(encoder.address, 0x87, 0x08);//sd brightness controll
+				I2C_WRITE(decoder.address, 0x02, 0x34);//pedestal input -7.5
+				I2C_WRITE(encoder.address, 0xA1, 0x62);//brightness  control IRE-15  (-7.5 * 2)
+				I2C_WRITE(encoder.address, 0x0B, 0x40);//Output gain 7.5%
+				//I2C_WRITE(decoder.address, 0x02, 0x34);//pedestal input -7.5
+				//I2C_WRITE(encoder.address, 0xA1, 0xDB);//brightness  control IRE-18.5  (-15 - 3.5)
+				//I2C_WRITE(encoder.address, 0xA1, 0xD3);//brightness  control IRE-22.5  (-7.5 * 3)
+				break;
+		}
 }
 
 // Returns true if no further settings should be applied.
@@ -302,45 +372,18 @@ static inline bool apply_output_settings(bool disable_outputs_on_freerun,
 using koryuu_settings::PhysInput;
 using koryuu_settings::PhysInput::INPUT_CVBS;
 using koryuu_settings::PhysInput::INPUT_SVIDEO;
+using koryuu_settings::PhysInput::INPUT_COMPONENT;
 using koryuu_settings::input_to_phys;
 using koryuu_settings::input_to_pedestal;
 
-static void set_smoothing(PhysInput input, bool smoothing)
-{
-    if (smoothing) {
-        // Shaping filter control 1, SVHS 3 luma & chroma LPF
-        I2C_WRITE(decoder.address, 0x17, 0x44);
-    }
-    else if (input == INPUT_CVBS) {
-        // Shaping filter control 1, AD recommendation for CVBS
-        I2C_WRITE(decoder.address, 0x17, 0x41);
-    }
-    else /* if (input == INPUT_SVIDEO) */ {
-        // Shaping filter control 1, set to default
-        I2C_WRITE(decoder.address, 0x17, 0x01);
-    }
 
-    if (smoothing) {
-        // Shaping filter control 2
-        // SVHS 3 luma LPF
-        I2C_WRITE(decoder.address, 0x18, 0x84);
-    }
-    else {
-        // Shaping filter control 2
-        // Select best filter automagically
-        I2C_WRITE(decoder.address, 0x18, 0x13);
-    }
-
-    // Antialiasing Filter Control 1
-    decoder.set_aa_filters(!smoothing, false, false, false, false);
-}
 
 static void setup_video(PhysInput input, bool pedestal, bool smoothing)
 {
     // Software reset decoder and encoder.
     // Ignore the I2C transaction failure.
     decoder.set_power_management(false, true);
-    I2C_WRITE<false>(encoder.address, 0x17, 0x02);
+    I2C_WRITE<false>(encoder.address, 0x17, 0x07);
 
     // Decoder setup
 
@@ -355,16 +398,23 @@ static void setup_video(PhysInput input, bool pedestal, bool smoothing)
     else {
         I2C_WRITE(decoder.address, 0x53, 0xce);
     }
-
+	
+	// iRE 0 input
+	decoder.select_autodetection(AD_PALBGHID_NTSCJ_SECAM);
+	
     // Select input
     if (input == INPUT_CVBS) {
         decoder.select_input(INSEL_CVBS_Ain1);
     }
-    else {
+    else if (input == INPUT_SVIDEO){
         decoder.select_input(INSEL_YC_Ain3_4);
     }
+    else
+    {
+    	decoder.select_input(INSEL_YPbPr_Ain1_2_3);
+    }
 
-    setup_ad_black_magic();
+    //setup_ad_black_magic();
 
     // Setup interrupts:
     // Interrupt on various SD events, active low, active until cleared
@@ -378,20 +428,16 @@ static void setup_video(PhysInput input, bool pedestal, bool smoothing)
     decoder.set_interrupt_config(
         IDL_ACTIVE_LOW, false, 0x10, ID_MUST_CLEAR, false);
     decoder.select_submap(DEC_SUBMAP_USER);
-
-    // Autodetect SD video mode
-    if (pedestal)
-        decoder.select_autodetection(AD_PALBGHID_NTSCM_SECAM);
-    else
-        decoder.select_autodetection(AD_PALBGHID_NTSCJ_SECAM);
+	
+	set_video_range(mode_ire);
 
     // Output control
     apply_output_settings(!DEC_TEST_PATTERN || disable_freerun, true, false);
 
     // Extended output control
     // Output full range, enable SFL, blank chroma during VBI, ITU BT.656-4
-    decoder.set_ext_output_control(true, true, true, false, true);
-
+    //decoder.set_ext_output_control(true, true, true, false, true);
+		
     // A write to a supposedly read-only register, recommended by AD scripts.
     /*
      * ADI docs say:
@@ -428,8 +474,6 @@ static void setup_video(PhysInput input, bool pedestal, bool smoothing)
     // Digital clamp on, time constant adaptive
     I2C_WRITE(decoder.address, 0x15, 0x60);
 
-    // Optional smoothing
-    set_smoothing(input, smoothing);
 
 #if 0
     // Comb filter control
@@ -463,17 +507,11 @@ static void setup_video(PhysInput input, bool pedestal, bool smoothing)
     I2C_WRITE(decoder.address, 0xf4, 0x00);
 #endif
     //filtering ntsc adaptive
-    I2C_WRITE(decoder.address, 0x38, 0xD8);
+    I2C_WRITE(decoder.address, 0x38, 0xc0);//5line adaptive comb ntsc
     //filtering pal adaptive
-	I2C_WRITE(decoder.address, 0x39, 0xD8);
-	
-    //ace Automatic contrast enhancement
-	I2C_WRITE(decoder.address, 0x0E, 0x40);
-	I2C_WRITE(decoder.address, 0x80, 0x80);
-    I2C_WRITE(decoder.address, 0x83, 0x1F);
-    I2C_WRITE(decoder.address, 0x84, 0xFF);
-    I2C_WRITE(decoder.address, 0x85, 0x0F);//slow
-	I2C_WRITE(decoder.address, 0x0E, 0x00);
+    I2C_WRITE(decoder.address, 0x39, 0xc0);//5line adaptive comb ntsc
+    I2C_WRITE(decoder.address, 0x4d, 0xCF);//disable NR input
+    //I2C_WRITE(decoder.address, 0x04, 0xB6);//full range digital output (decoder)??? g du faire nimporte quoi
 
     // Encoder setup
     setup_encoder();
@@ -607,7 +645,7 @@ int main(void)
 			settings.write();
 		}
 
-		curr_input = settings.settings.default_input;
+		curr_input = COMPONENT;//settings.settings.default_input;
 	#if DEC_TEST_PATTERN
 		disable_freerun = !!settings.settings.disable_free_run;
 	#endif
@@ -645,69 +683,131 @@ int main(void)
 		uint8_t dec_status3 = 0x00;
 		bool got_interrupt = false;
 		bool check_once_more = true;
+	//set filter to narow at begining
+	I2C_WRITE(decoder.address, 0x19, 0xf0);
+	I2C_WRITE(decoder.address, 0x17, 0x59);
+	I2C_WRITE(decoder.address, 0x3d, 0x32);//color kill treshold 4%
 		while (1) {
 			bool input_change_pressed = input_change.read();
 			bool option_pressed = option.read();
-
-			if (input_change_pressed && !option_pressed) {
-				switch (curr_input) {
-				case CVBS:
-	#if DEBUG
-					serial << _T("Transition: CVBS_PEDESTAL -> SVIDEO\r\n");
-	#endif
-					interlace_status = INTERLACE_STATUS_UNKNOWN;
-					freerun_status = FREERUN_STATUS_UNKNOWN;
-					setup_video(INPUT_SVIDEO, pedestal_enabled, false);
-					curr_input = SVIDEO;
-					led_CVBS = false;
-					led_YC = true;
-					break;
-				case SVIDEO:
-	#if DEBUG
-					serial << _T("Transition: CVBS_PEDESTAL -> SVIDEO\r\n");
-	#endif
-					interlace_status = INTERLACE_STATUS_UNKNOWN;
-					freerun_status = FREERUN_STATUS_UNKNOWN;
-					setup_video(INPUT_CVBS, pedestal_enabled, false);
-					curr_input = CVBS;
-					led_CVBS = true;
-					led_YC = false;
-					break;
+			
+			if(I2C_READ_ONE(decoder.address, 0x10) & 0x01 ?true:false)
+			{
+				//led_OPT = true;
+				input_timer = 0;
+			}
+			else
+			{
+				//change ipunt after x second
+				//led_OPT = false;
+				if (input_timer > 20) 
+				{
+					switch (curr_input) {
+					case CVBS:
+						interlace_status = INTERLACE_STATUS_UNKNOWN;
+						freerun_status = FREERUN_STATUS_UNKNOWN;
+						setup_video(INPUT_SVIDEO, pedestal_enabled, false);
+						curr_input = SVIDEO;
+						led_CVBS = false;
+						led_YC = true;
+						break;
+					case SVIDEO:
+						interlace_status = INTERLACE_STATUS_UNKNOWN;
+						freerun_status = FREERUN_STATUS_UNKNOWN;
+						setup_video(INPUT_COMPONENT, pedestal_enabled, false);
+						curr_input = COMPONENT;
+						led_CVBS = true;
+						led_YC = true;
+						break;
+					
+					case COMPONENT:
+						interlace_status = INTERLACE_STATUS_UNKNOWN;
+						freerun_status = FREERUN_STATUS_UNKNOWN;
+						setup_video(INPUT_CVBS, pedestal_enabled, false);
+						curr_input = CVBS;
+						led_CVBS = true;
+						led_YC = false;
+						break;
+					}
+					input_timer = 0;
+				}
+				else
+				{
+					input_timer ++;
 				}
 			}
-
-			if (!input_change_pressed && option_pressed) {
-				pedestal_enabled = !pedestal_enabled;
-				led_OPT = pedestal_enabled;
-                
-                switch (pedestal_enabled) {
-				case true:
-					decoder.select_autodetection(AD_PALBGHID_NTSCM_SECAM);
-					break;
-				case false:
-					decoder.select_autodetection(AD_PALBGHID_NTSCJ_SECAM);
-					break;
+			
+			if((I2C_READ_ONE(decoder.address, 0x10) & 0x80 ?true:false) && chroma_enabled == true )
+			{
+				I2C_WRITE(encoder.address, 0x84, 0x10);//disable chroma out
+				chroma_enabled = false;
+				led_OPT = true;
+			}
+			else if((I2C_READ_ONE(decoder.address, 0x10) & 0x80 ?false:true) && chroma_enabled == false )
+			{
+				I2C_WRITE(encoder.address, 0x84, 0x00);//enable chroma out
+				chroma_enabled = true;
+				led_OPT = false;
+			}
+			
+			
+			if (input_change_pressed && !option_pressed) {
+				switch (noise_reduction)
+				{
+					case 0:
+						I2C_WRITE(decoder.address, 0x4d, 0xEF);//input dnr ON
+						I2C_WRITE(encoder.address, 0x88, 0x04);//output dnr OFF		
+						noise_reduction = 1;
+						break;
+					case 1:
+						I2C_WRITE(decoder.address, 0x4d, 0xCF);//input dnr OFF
+						I2C_WRITE(encoder.address, 0x88, 0x24);//output dnr ON
+						noise_reduction = 2;
+						break;
+					case 2:
+						I2C_WRITE(decoder.address, 0x4d, 0xEF);//input dnr ON
+						I2C_WRITE(encoder.address, 0x88, 0x24);//output dnr ON
+						noise_reduction = 3;
+						break;
+					case 3:
+						I2C_WRITE(decoder.address, 0x4d, 0xCF);//input dnr OFF
+						I2C_WRITE(encoder.address, 0x88, 0x04);//output dnr OFF	
+						noise_reduction = 0;
+						break;
 				}
-                    //ace Automatic contrast enhancement
-	                I2C_WRITE(decoder.address, 0x0E, 0x40);
-                    I2C_WRITE(decoder.address, 0x80, 0x00);//disable ace
-                    _delay_ms(5);
-	                I2C_WRITE(decoder.address, 0x80, 0x80);//enable ace
-                    I2C_WRITE(decoder.address, 0x83, 0x1F);
-                    I2C_WRITE(decoder.address, 0x84, 0xFF);
-                    I2C_WRITE(decoder.address, 0x85, 0x0F);
-	                I2C_WRITE(decoder.address, 0x0E, 0x00);
+			}
+			
+			if (!input_change_pressed && option_pressed) {
+				if(mode_ire < 5 )//si inferieux a x incrementer sinon 0
+				{
+					mode_ire = mode_ire +1;
+				}
+				else
+				{
+					mode_ire = 0;
+					rgb_color = !rgb_color;
+					if(rgb_color)
+					{
+						I2C_WRITE(encoder.address, 0x02, 0x54);
+					}
+					else
+					{
+						I2C_WRITE(encoder.address, 0x02, 0x74);
+					}
+				}
+				set_video_range(mode_ire);
+                setup_encoder();
 			}
             
             if (input_change_pressed && option_pressed) {
-                if(component_enabled)
+                if(component_output)
                 {
                     //CVBS out
-                    component_enabled = false;
+                    component_output = false;
                         
                     if(curr_input == SVIDEO)
                     {
-					    led_YC = true;
+			led_YC = true;
                         led_CVBS = false;
                     }
                     else
@@ -719,12 +819,12 @@ int main(void)
                 else
                 {
                     //Component out
-                    component_enabled = true;
+                    component_output = true;
                 }
                 setup_encoder();
 			}
             
-            if(component_enabled)
+            if(component_output)
             {
                 if(curr_input == SVIDEO)
                 {
@@ -737,6 +837,62 @@ int main(void)
                     led_YC = false;
                 }
             }
+			/*if(mode_ire > 0)
+			{
+				//using the main loop for blinking the IRE OPTION LED
+				switch(led_timer1){
+					case 1000:	
+						led_OPT = true;
+						_delay_ms(20);
+						led_OPT = false;
+						if(!(mode_ire == 1))
+						{
+							led_timer1 = 0;
+						}
+					break;
+					case 1500:	
+						led_OPT = true;
+						_delay_ms(20);
+						led_OPT = false;
+						if(!(mode_ire == 2))
+						{
+							led_timer1 = 0;
+						}
+					break;
+					case 2000:	
+						led_OPT = true;
+						_delay_ms(20);
+						led_OPT = false;
+						if(!(mode_ire == 3))
+						{
+							led_timer1 = 0;
+						}
+					break;
+					case 2500:
+						led_OPT = true;
+						_delay_ms(20);
+						led_OPT = false;
+						if(!(mode_ire == 4))
+						{
+							led_timer1 = 0;
+						}
+					break;
+				}
+				led_timer1 ++;
+				_delay_ms(10);
+			}*/
+			
+			/*switch(input_is_instable())
+			{
+				case true:
+					
+				break;	
+				
+				case false:
+					
+				break;
+			}*/
+/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 			got_interrupt = !decoder.intrq;
 

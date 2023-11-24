@@ -25,11 +25,13 @@ namespace koryuu_settings {
         CVBS_PEDESTAL = 1,
         SVIDEO = 2,
         SVIDEO_PEDESTAL = 3,
+        COMPONENT = 4,
     };
 
     enum PhysInput : uint8_t {
         INPUT_CVBS = 0,
         INPUT_SVIDEO = 1,
+        INPUT_COMPONENT = 2,
     };
 
     PhysInput input_to_phys[] = {
@@ -37,6 +39,7 @@ namespace koryuu_settings {
         [CVBS_PEDESTAL] = INPUT_CVBS,
         [SVIDEO] = INPUT_SVIDEO,
         [SVIDEO_PEDESTAL] = INPUT_SVIDEO,
+        [COMPONENT] = INPUT_COMPONENT,
     };
 
     bool input_to_pedestal[] = {
